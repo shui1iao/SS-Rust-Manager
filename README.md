@@ -13,7 +13,7 @@
 
 ## 🎯 核心特性
 
-- 安装 / 更新 shadowsocks-rust
+- 安装 / 更新 shadowsocks-rust 核心
 - 交互式配置端口和密码
 - 仅安装 SS，不包含 ShadowTLS
 - systemd 服务管理和脚本自更新

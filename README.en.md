@@ -13,7 +13,7 @@
 
 ## 🎯 Features
 
-- Install / update shadowsocks-rust
+- Install / update the shadowsocks-rust core
 - Interactive port and password setup
 - SS only, no ShadowTLS
 - systemd service management and self-update
