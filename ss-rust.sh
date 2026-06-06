@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.5"
+VERSION="0.1.6"
 REPO_RAW="https://raw.githubusercontent.com/shuijiao1/SS-Rust-Manager/main"
 UPDATE_URL="$REPO_RAW/ss-rust.sh"
 VERSION_URL="$REPO_RAW/version.txt"
@@ -31,10 +31,48 @@ install_pkg() { if have apt-get; then apt-get update && DEBIAN_FRONTEND=noninter
 	err "未找到包管理器，请手动安装：$*"
 	exit 1
 fi; }
+unit_exists() { systemctl list-unit-files "$1" >/dev/null 2>&1; }
 ensure_deps() {
 	local m=()
 	for c in curl tar xz jq systemctl openssl; do have "$c" || m+=("$c"); done
 	((${#m[@]} == 0)) || install_pkg curl tar xz-utils jq systemd openssl coreutils
+}
+time_sync_status() {
+	if have timedatectl; then
+		local synced
+		synced="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
+		[[ "$synced" == "yes" ]] && printf "${GREEN}已同步${NC}" || printf "${RED}未确认${NC}"
+	else
+		printf "${YELLOW}未知${NC}"
+	fi
+}
+ensure_time_sync() {
+	info "检查系统时间同步"
+	if have timedatectl; then
+		timedatectl set-ntp true 2>/dev/null || true
+	fi
+	if unit_exists systemd-timesyncd.service; then
+		systemctl enable --now systemd-timesyncd.service >/dev/null 2>&1 || true
+	elif unit_exists chrony.service; then
+		systemctl enable --now chrony.service >/dev/null 2>&1 || true
+	elif unit_exists chronyd.service; then
+		systemctl enable --now chronyd.service >/dev/null 2>&1 || true
+	else
+		install_pkg chrony
+		if unit_exists chrony.service; then
+			systemctl enable --now chrony.service >/dev/null 2>&1 || true
+		elif unit_exists chronyd.service; then
+			systemctl enable --now chronyd.service >/dev/null 2>&1 || true
+		fi
+	fi
+	if have chronyc; then
+		chronyc -a makestep >/dev/null 2>&1 || true
+	fi
+	if have timedatectl && [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" == "yes" ]]; then
+		ok "系统时间同步已启用"
+	else
+		warn "已尝试启用时间同步，但当前同步状态暂未确认；稍后可在菜单中再次查看/同步"
+	fi
 }
 validate_port() { [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535)); }
 rand_port() { echo $((RANDOM % 55536 + 10000)); }
@@ -120,6 +158,7 @@ latest_asset() {
 }
 install_ss() {
 	ensure_deps
+	ensure_time_sync
 	local url tmp method password
 	url="$(latest_asset)"
 	tmp="$(mktemp -d)"
@@ -267,6 +306,7 @@ menu() {
 		say "${CYAN}============================================${NC}"
 		say "安装状态：$(install_status)"
 		say "运行状态：$(run_status)"
+		say "时间同步：$(time_sync_status)"
 		say ""
 		say "${BLUE}=== 基础功能 ===${NC}"
 		say "${GREEN}1.${NC} 安装/更新 ss-rust 核心"
@@ -281,10 +321,11 @@ menu() {
 		say "${GREEN}8.${NC} 查看服务状态"
 		say ""
 		say "${BLUE}=== 系统功能 ===${NC}"
-		say "${GREEN}9.${NC} 检查脚本更新"
+		say "${GREEN}9.${NC} 同步系统时间"
+		say "${GREEN}10.${NC} 检查脚本更新"
 		say "${GREEN}0.${NC} 退出脚本"
 		say "${CYAN}============================================${NC}"
-		read -rp "请输入选项 [0-9]: " c
+		read -rp "请输入选项 [0-10]: " c
 		case "$c" in
 		1) install_ss ;;
 		2) uninstall_ss ;;
@@ -294,7 +335,8 @@ menu() {
 		6) service_ctl start ;;
 		7) service_ctl stop ;;
 		8) service_ctl status ;;
-		9) check_update ;;
+		9) ensure_time_sync ;;
+		10) check_update ;;
 		0) exit 0 ;;
 		*) err "无效选项" ;;
 		esac
@@ -323,8 +365,13 @@ uninstall)
 	need_root
 	uninstall_ss
 	;;
+sync-time)
+	need_root
+	ensure_deps
+	ensure_time_sync
+	;;
 update-script)
 	need_root
 	check_update
 	;;
--h | --help | help) echo "bash ss-rust.sh [install|modify|view|start|stop|restart|status|uninstall|update-script]" ;; *) menu ;; esac
+-h | --help | help) echo "bash ss-rust.sh [install|modify|view|start|stop|restart|status|uninstall|sync-time|update-script]" ;; *) menu ;; esac

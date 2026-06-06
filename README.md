@@ -1,7 +1,7 @@
 # SS-Rust-Manager
 
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat-square&logo=gnu-bash&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.1.5-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-v0.1.6-blue?style=flat-square)
 
 **中文** | [English](README.en.md)
 
@@ -17,6 +17,7 @@
 - 交互式配置端口和密码
 - 仅安装 SS，不包含 ShadowTLS
 - systemd 服务管理和脚本自更新
+- 安装前启用/检查系统时间同步，菜单支持手动同步
 
 ---
 

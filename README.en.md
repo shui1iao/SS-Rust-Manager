@@ -1,7 +1,7 @@
 # SS-Rust-Manager
 
 ![Shell](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat-square&logo=gnu-bash&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.1.5-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-v0.1.6-blue?style=flat-square)
 
 [中文](README.md) | **English**
 
@@ -17,6 +17,7 @@
 - Interactive port and password setup
 - SS only, no ShadowTLS
 - systemd service management and self-update
+- Enable/check system time synchronization before install, with a manual sync menu entry
 
 ---
 
