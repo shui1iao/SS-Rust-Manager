@@ -24,7 +24,7 @@
 ## 🚀 Quick Start
 
 ```bash
-bash <(curl -Ls https://ss.shuijiao.de)
+bash <(curl -Ls https://ss.siaoz.si)
 ```
 
 ---

@@ -24,7 +24,7 @@
 ## 🚀 快速开始
 
 ```bash
-bash <(curl -Ls https://ss.shuijiao.de)
+bash <(curl -Ls https://ss.siaoz.si)
 ```
 
 ---
