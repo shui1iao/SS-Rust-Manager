@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.6"
+VERSION="0.1.7"
 REPO_RAW="https://raw.githubusercontent.com/shui1iao/SS-Rust-Manager/main"
 UPDATE_URL="$REPO_RAW/ss-rust.sh"
 VERSION_URL="$REPO_RAW/version.txt"
@@ -35,7 +35,7 @@ unit_exists() { systemctl list-unit-files "$1" >/dev/null 2>&1; }
 ensure_deps() {
 	local m=()
 	for c in curl tar xz jq systemctl openssl; do have "$c" || m+=("$c"); done
-	((${#m[@]} == 0)) || install_pkg curl tar xz-utils jq systemd openssl coreutils
+	((${#m[@]} == 0)) || { local xz_pkg="xz-utils"; have apt-get || xz_pkg="xz"; install_pkg curl tar "$xz_pkg" jq systemd openssl coreutils; }
 }
 time_sync_status() {
 	if have timedatectl; then
@@ -140,10 +140,10 @@ urlencode() {
 	printf '%s' "$o"
 }
 
-asset_regex() { case "$(uname -m)" in x86_64 | amd64) echo 'x86_64-unknown-linux-gnu\.tar\.xz$' ;; *)
-	err "暂只支持 amd64/x86_64，当前架构：$(uname -m)"
-	exit 1
-	;;
+asset_regex() { case "$(uname -m)" in
+	x86_64 | amd64) echo 'x86_64-unknown-linux-gnu\.tar\.xz$' ;;
+	aarch64 | arm64) echo 'aarch64-unknown-linux-gnu\.tar\.xz$' ;;
+	*) err "暂只支持 amd64/arm64，当前架构：$(uname -m)"; exit 1 ;;
 esac }
 latest_asset() {
 	local json url re
@@ -162,34 +162,38 @@ install_ss() {
 	local url tmp method password
 	url="$(latest_asset)"
 	tmp="$(mktemp -d)"
+	trap 'rm -rf -- "$tmp"' RETURN
 	info "下载 shadowsocks-rust：$url"
-	curl -fL --retry 3 -o "$tmp/ss.tar.xz" "$url"
+	curl -fsSL --retry 3 -o "$tmp/ss.tar.xz" "$url"
+	if curl -fsSL --retry 2 -o "$tmp/ss.tar.xz.sha256" "${url}.sha256" 2>/dev/null; then
+		local expected_sha actual_sha
+		expected_sha=$(awk '{print $1}' "$tmp/ss.tar.xz.sha256" | head -n1)
+		actual_sha=$(sha256sum "$tmp/ss.tar.xz" | awk '{print $1}')
+		[[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || { err "SHA256 校验失败，已中止安装"; exit 1; }
+		ok "SHA256 校验通过"
+	else
+		err "未能获取上游 .sha256 校验文件，已拒绝继续安装"
+		exit 1
+	fi
 	tar -xf "$tmp/ss.tar.xz" -C "$tmp"
 	install -m 0755 "$tmp/ssserver" "$BIN"
-	rm -rf "$tmp"
 	mkdir -p "$CONFIG_DIR"
+	chmod 0700 "$CONFIG_DIR"
 	if [[ ! -s "$CONFIG_FILE" ]]; then
 		read -rp "请输入 ss-rust 监听端口（留空随机）: " port
 		port=${port:-$(rand_port)}
-		validate_port "$port" || {
-			err "端口无效"
-			exit 1
-		}
+		validate_port "$port" || { err "端口无效"; exit 1; }
 		method="$(select_method)" || exit 1
 		read -rp "请输入 ss-rust 密码（留空随机）: " password
 		password=${password:-$(rand_pass_for_method "$method")}
 		validate_password_for_method "$method" "$password" || exit 1
-		cat >"$CONFIG_FILE" <<EOF
-{
-  "server": "0.0.0.0",
-  "server_port": $port,
-  "password": "$password",
-  "method": "$method",
-  "timeout": 300,
-  "fast_open": false,
-  "mode": "tcp_and_udp"
-}
-EOF
+		local cfg_tmp
+		cfg_tmp="$(mktemp "$CONFIG_DIR/.config.XXXXXX.json")"
+		jq -n --argjson port "$((10#$port))" --arg password "$password" --arg method "$method" 			'{server:"0.0.0.0",server_port:$port,password:$password,method:$method,timeout:300,fast_open:false,mode:"tcp_and_udp"}' >"$cfg_tmp"
+		chmod 0600 "$cfg_tmp"
+		mv -f "$cfg_tmp" "$CONFIG_FILE"
+	else
+		chmod 0600 "$CONFIG_FILE"
 	fi
 	cat >"$SERVICE_FILE" <<EOF
 [Unit]
@@ -209,7 +213,8 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 	systemctl daemon-reload
-	systemctl enable --now "$SERVICE_NAME"
+	systemctl enable "$SERVICE_NAME"
+	systemctl restart "$SERVICE_NAME"
 	ok "ss-rust 核心已安装/更新并启动"
 	view_config
 }
@@ -237,7 +242,13 @@ view_config() {
 	say "Surge:"
 	say "${GREEN}VPS = ss, $ip, $port, encrypt-method=$method, password=$password, udp-relay=true${NC}"
 	say "URI:"
-	say "${GREEN}ss://${method}:${p_enc}@${ip}:${port}#${tag}${NC}"
+	if [[ "$method" == 2022-* ]]; then
+		say "${GREEN}ss://${method}:${p_enc}@${ip}:${port}#${tag}${NC}"
+	else
+		local userinfo_b64
+		userinfo_b64=$(printf '%s:%s' "$method" "$password" | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+		say "${GREEN}ss://${userinfo_b64}@${ip}:${port}#${tag}${NC}"
+	fi
 	say "------------------------------------------"
 }
 modify_config() {
@@ -258,7 +269,11 @@ modify_config() {
 	read -rp "新密码（留空随机）: " password
 	password=${password:-$(rand_pass_for_method "$method")}
 	validate_password_for_method "$method" "$password" || return 1
-	jq --argjson port "$port" --arg password "$password" --arg method "$method" '.server_port=$port | .password=$password | .method=$method' "$CONFIG_FILE" >/tmp/ss-rust.json && mv /tmp/ss-rust.json "$CONFIG_FILE"
+	local cfg_tmp
+	cfg_tmp="$(mktemp "$CONFIG_DIR/.config.XXXXXX.json")"
+	jq --argjson port "$((10#$port))" --arg password "$password" --arg method "$method" '.server_port=$port | .password=$password | .method=$method' "$CONFIG_FILE" >"$cfg_tmp"
+	chmod 0600 "$cfg_tmp"
+	mv -f "$cfg_tmp" "$CONFIG_FILE"
 	systemctl restart "$SERVICE_NAME"
 	ok "配置已更新"
 	view_config
@@ -286,9 +301,11 @@ check_update() {
 	tmp=$(mktemp)
 	curl -fsSL "$UPDATE_URL" -o "$tmp"
 	bash -n "$tmp"
-	install -m 0755 "$tmp" "$0"
+	local target="$0"
+	[[ -f "$target" && -w "$target" ]] || target="/usr/local/bin/ss-rust-manager"
+	install -m 0755 "$tmp" "$target"
 	rm -f "$tmp"
-	ok "脚本已更新"
+	ok "脚本已更新至 $target"
 	exit 0
 }
 install_status() { [[ -x "$BIN" ]] && printf "${GREEN}已安装${NC}" || printf "${RED}未安装${NC}"; }
